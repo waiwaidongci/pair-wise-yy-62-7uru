@@ -19,6 +19,8 @@ body { margin: 0; min-width: 320px; background: #eef2f0; }
 .voyage-card { padding: 12px; background: white; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; }
 .app-nav > a { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 11px; color: #5b6f68; border-radius: 5px; text-decoration: none; font-size: 13px; margin-bottom: 3px; }
 .app-nav > a.active { color: #176858; background: #e2f0eb; font-weight: 700; }
+.nav-badge { margin-left: auto; min-width: 19px; text-align: center; }
+.page-heading-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .nav-foot { margin-top: auto; display: flex; gap: 8px; padding: 14px 11px; color: #778a83; border-top: 1px solid var(--line); }
 .page { padding: 26px; max-width: 1660px; margin: 0 auto; }
 .page-heading { display: flex; justify-content: space-between; align-items: end; gap: 18px; margin-bottom: 18px; }
@@ -110,6 +112,20 @@ body { margin: 0; min-width: 320px; background: #eef2f0; }
 .print-deck small { color: var(--muted); font-size: 8px; margin-top: 5px; }
 .print-deck b { position: absolute; right: 5px; bottom: 5px; background: #c26b2a; color: white; border-radius: 3px; font-size: 8px; padding: 2px 4px; }
 .print-signatures { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-top: 35px; padding-top: 17px; border-top: 1px solid var(--line); font-size: 11px; }
+
+/* 离线合并对账 */
+.merge-conflict { border: 1px solid #e6c99b; background: #fffdf8; box-shadow: none !important; }
+.merge-conflict.slot { border-color: #e3b3b0; background: #fff8f7; }
+.merge-conflict.resolved { border-color: #b7dccf; background: #f5fbf9; opacity: .92; }
+.diff-table th, .diff-table td { font-size: 11px; padding: 5px 8px !important; }
+.diff-table .diff-ship { background: #e9f4f0; font-weight: 700; color: #176858; }
+.diff-table .diff-terminal { background: #ececf8; font-weight: 700; color: #3b4a8f; }
+.diff-table .diff-ship-h { color: #176858; }
+.diff-table .diff-terminal-h { color: #3b4a8f; }
+.slot-member { padding: 6px 8px; border: 1px solid #efd9d7; border-radius: 5px; background: white; }
+.reconfirm-card { border-color: #e6c99b; background: #fffbf4; box-shadow: none !important; }
+.comment-card.stale-limit { border-color: #e6c99b; background: #fffaf0; }
+.empty-merge { border: 1px dashed #b8c8c2; background: rgba(255,255,255,.6); box-shadow: none !important; text-align: center; }
 
 @media (max-width: 1200px) {
   .stowage-grid { grid-template-columns: 260px minmax(460px, 1fr); }
