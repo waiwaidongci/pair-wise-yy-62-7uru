@@ -18,6 +18,34 @@ export type Cargo = {
   color: string;
 };
 
+export type StowageComment = {
+  id: string;
+  cargoId: string;
+  author: string;
+  role: '船长' | '码头' | '货主';
+  content: string;
+  status: '待确认' | '已接受' | '已退回';
+};
+
+/** 离线审阅包：船/码头各持一份草稿，网络恢复后凭此包对账。携带方案版本与逐票货位指纹。 */
+export type ReviewPackage = {
+  packageId: string;
+  source: '船方' | '码头';
+  vessel: string;
+  voyageId: string;
+  planRevision: number;
+  exportedAt: string;
+  baselineRevision: number;
+  /** 两边共同的对账基线（上次锁定/确认的版本） */
+  baseline: Cargo[];
+  /** 本侧草稿 */
+  cargo: Cargo[];
+  /** 逐票货位指纹（deck/bay/row/tier 的哈希） */
+  fingerprints: Record<string, string>;
+  comments: StowageComment[];
+  acceptedLimits: string[];
+};
+
 const voyageData = {
   id: 'V-2609-17',
   vessel: '海岳轮',

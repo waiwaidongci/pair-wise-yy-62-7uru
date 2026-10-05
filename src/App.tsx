@@ -34,8 +34,11 @@ import {
   IconAnchor,
   IconBoxMultiple,
   IconCheck,
+  IconCopy,
   IconCube,
+  IconDownload,
   IconFileDescription,
+  IconGitMerge,
   IconHistory,
   IconLayoutBoardSplit,
   IconLock,
@@ -46,25 +49,30 @@ import {
   IconRulerMeasure,
   IconRoute,
   IconShip,
-  IconUsers
+  IconUpload,
+  IconUsers,
+  IconX
 } from '@tabler/icons-react';
 import * as THREE from 'three';
-import { useGetVoyageQuery, type Cargo, type CargoType } from './api';
+import { useGetVoyageQuery, type Cargo, type CargoType, type ReviewPackage, type StowageComment } from './api';
 import {
   acceptComment,
   acceptLimit,
   addComment,
   calculateStability,
   detectConflicts,
+  importReviewPackage,
   lockPlan,
   moveCargo,
   rejectComment,
+  resolveMergeConflict,
   selectCargo,
   setViewMode,
   store,
   updateLashing,
   type RootState
 } from './store';
+import { buildReviewPackage, slotFingerprint, slotKey, type MergeConflict } from './merge';
 
 const nav = [
   { path: '/', label: '航次总览', icon: <IconShip size={17} /> },
@@ -223,9 +231,11 @@ function Overview() {
   const dispatch = useDispatch();
   const stability = calculateStability(state.cargo);
   const conflicts = detectConflicts(state.cargo);
+  const openMergeConflicts = state.conflicts.filter((item) => item.status === 'open');
   const active = state.cargo.find((item) => item.id === state.activeCargoId) ?? state.cargo[0];
   return <div className="page">
-    <PageHeading eyebrow={`${data?.id ?? 'V-2609-17'} / 航次审阅`} title="多用途船舶配载校核" description={`${data?.vessel ?? '海岳轮'} · ${data?.route ?? '上海 → 釜山 → 温哥华'} · 计划离港 ${data?.departure ?? '10-02 14:00'}`} actions={<><Button variant="default" leftSection={<IconRefresh size={16} />} onClick={() => dispatch(setViewMode(state.viewMode === '3d' ? 'section' : '3d'))}>{state.viewMode === '3d' ? '二维剖面' : '三维视角'}</Button><Button color="teal" leftSection={<IconLock size={16} />} disabled={conflicts.length > 0 || state.locked} onClick={() => dispatch(lockPlan())}>{state.locked ? '方案已锁定' : '锁定配载版本'}</Button></>} />
+    <PageHeading eyebrow={`${data?.id ?? 'V-2609-17'} / 航次审阅`} title="多用途船舶配载校核" description={`${data?.vessel ?? '海岳轮'} · ${data?.route ?? '上海 → 釜山 → 温哥华'} · 计划离港 ${data?.departure ?? '10-02 14:00'}`} actions={<><Button variant="default" leftSection={<IconRefresh size={16} />} onClick={() => dispatch(setViewMode(state.viewMode === '3d' ? 'section' : '3d'))}>{state.viewMode === '3d' ? '二维剖面' : '三维视角'}</Button><Button color="teal" leftSection={<IconLock size={16} />} disabled={conflicts.length > 0 || openMergeConflicts.length > 0 || state.locked} onClick={() => dispatch(lockPlan())}>{state.locked ? '方案已锁定' : '锁定配载版本'}</Button></>} />
+    {openMergeConflicts.length > 0 && <div className="warning-banner"><IconAlertTriangle size={18} /><strong>{openMergeConflicts.length} 项离线合并冲突待处理</strong><span>船/码头草稿存在不一致，请在「方案对比」中逐项裁决后再锁定。</span></div>}
     {conflicts.length > 0 && <div className="warning-banner"><IconAlertTriangle size={18} /><strong>{conflicts.length} 项配载冲突待处理</strong><span>{conflicts.map((item) => item.title).join('、')}</span></div>}
     <SimpleGrid cols={{ base: 2, lg: 4 }} spacing="sm" mb="md">{[
       ['总货重', `${stability.total.toFixed(1)} t`, '设计上限 3560 t', 'ok'],
@@ -271,22 +281,107 @@ function Stowage() {
   </div>;
 }
 
+function MergeConflictRow({ conflict, dispatch }: { conflict: MergeConflict; dispatch: ReturnType<typeof useDispatch> }) {
+  const kindLabel = conflict.kind === 'bill' ? '提单冲突' : conflict.kind === 'slot' ? '货位冲突' : '限制条件冲突';
+  const localVer = conflict.localVersion ?? conflict.localClaimant?.version;
+  const remoteVer = conflict.remoteVersion ?? conflict.remoteClaimant?.version;
+  const renderCargo = (v: Cargo | undefined) =>
+    v ? <Text size="xs" mt={2}>{v.bill} · {v.type} · B{v.bay}/R{v.row}/T{v.tier} · 绑扎 {v.lashing}</Text> : <Text size="xs" mt={2} c="dimmed">（无）</Text>;
+  const renderComment = (c: StowageComment | undefined) =>
+    c ? <Text size="xs" mt={2}>{c.content} · 状态 {c.status}</Text> : <Text size="xs" mt={2} c="dimmed">（无）</Text>;
+  return (
+    <div className="merge-conflict-row">
+      <Group gap="xs"><Badge size="xs" color="red">{kindLabel}</Badge><Text size="xs" fw={700}>{conflict.detail}</Text></Group>
+      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs" mt="xs">
+        <div className="merge-version local">
+          <Text size="xs" fw={700} c="teal">船方版（当前草稿）</Text>
+          {conflict.kind === 'comment' ? renderComment(conflict.localComment) : renderCargo(localVer)}
+          <Button size="compact-xs" mt="xs" variant="default" onClick={() => dispatch(resolveMergeConflict({ conflictId: conflict.id, resolution: 'local' }))}>保留船方版</Button>
+        </div>
+        <div className="merge-version remote">
+          <Text size="xs" fw={700} c="orange">码头版（导入草稿）</Text>
+          {conflict.kind === 'comment' ? renderComment(conflict.remoteComment) : renderCargo(remoteVer)}
+          <Button size="compact-xs" mt="xs" color="teal" onClick={() => dispatch(resolveMergeConflict({ conflictId: conflict.id, resolution: 'remote' }))}>保留码头版</Button>
+        </div>
+      </SimpleGrid>
+    </div>
+  );
+}
+
 function Compare() {
   const state = useSelector((root: RootState) => root.stowage);
   const stability = calculateStability(state.cargo);
   const changed = state.cargo.filter((item) => item.id === 'BL-88247' || item.id === 'BL-88219' || item.id === 'BL-88240');
   const [acceptOpen, setAcceptOpen] = useState(false);
+  const [exportSource, setExportSource] = useState<'船方' | '码头'>('船方');
+  const [exportJson, setExportJson] = useState('');
+  const [importText, setImportText] = useState('');
+  const [importParseError, setImportParseError] = useState('');
   const dispatch = useDispatch();
+  const openConflicts = state.conflicts.filter((c) => c.status === 'open');
+  const resolvedConflicts = state.conflicts.filter((c) => c.status === 'resolved');
+  const slotChangedCount = state.cargo.filter((c) => {
+    const b = state.baseline.find((x) => x.id === c.id);
+    return b && slotKey(c) !== slotKey(b);
+  }).length;
+
+  const handleExport = () => {
+    const pkg = buildReviewPackage(state, exportSource);
+    setExportJson(JSON.stringify(pkg, null, 2));
+  };
+  const handleImport = () => {
+    setImportParseError('');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(importText);
+    } catch {
+      setImportParseError('无法解析 JSON：请粘贴完整的离线审阅包内容。');
+      return;
+    }
+    dispatch(importReviewPackage(parsed as ReviewPackage));
+  };
+  const copyExport = () => { if (exportJson && navigator.clipboard) navigator.clipboard.writeText(exportJson).catch(() => {}); };
+
   return <div className="page">
-    <PageHeading eyebrow="PLAN BASELINE / V4 → V5" title="配载方案对比" description="按货位、重量分布和受限条件比较两个版本，并逐项决定是否接受。" actions={<Button color="teal" leftSection={<IconCheck size={16} />} onClick={() => setAcceptOpen(true)}>形成审阅结论</Button>} />
-    <div className="compare-summary"><div><span>当前版本</span><strong>V{state.planRevision}</strong><small>总重 {stability.total.toFixed(1)}t</small></div><span className="compare-arrow">→</span><div><span>被比较版本</span><strong>V4</strong><small>总重 {(stability.total + 5.2).toFixed(1)}t</small></div><Badge color="teal" variant="light">3 处货位变化</Badge></div>
-    <div className="compare-grid"><Card padding={0}><div className="panel-title"><div><strong>V4 基线</strong><Text size="xs" c="dimmed">批准于 09-28 16:20</Text></div></div><div className="mini-deck old-deck">{Array.from({ length: 28 }).map((_, index) => <div key={index} className={index === 6 || index === 11 || index === 17 ? 'changed' : ''}>{index === 6 ? '219' : index === 11 ? '240' : index === 17 ? '247' : ''}</div>)}</div></Card><Card padding={0}><div className="panel-title"><div><strong>V5 候选</strong><Text size="xs" c="dimmed">当前编辑 · {state.draftSavedAt}</Text></div></div><div className="mini-deck new-deck">{Array.from({ length: 28 }).map((_, index) => <div key={index} className={index === 6 || index === 11 || index === 17 ? 'changed' : ''}>{index === 6 ? '219' : index === 11 ? '240' : index === 17 ? '247' : ''}</div>)}</div></Card></div>
-    <Card padding="md" mt="md"><div className="panel-title"><div><strong>参数差异</strong><Text size="xs" c="dimmed">系统通过检查的差异可直接接受</Text></div><Badge>{changed.length} 项</Badge></div><Table verticalSpacing="sm"><Table.Thead><Table.Tr><Table.Th>货物</Table.Th><Table.Th>字段</Table.Th><Table.Th>V4</Table.Th><Table.Th>V5</Table.Th><Table.Th>说明</Table.Th><Table.Th>决定</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{[
+    <PageHeading eyebrow="PLAN BASELINE / 离线对账" title="配载方案对比" description="船/码头各持草稿，网络恢复后按提单逐票合并；同一提单或货位被两边改过则保留两版、列出冲突。" actions={<Button color="teal" leftSection={<IconCheck size={16} />} onClick={() => setAcceptOpen(true)}>形成审阅结论</Button>} />
+
+    <Card padding="md" className="merge-card">
+      <div className="panel-title"><div><strong>离线审阅包对账</strong><Text size="xs" c="dimmed">携带方案版本与逐票货位指纹 · 按提单逐票合并 · 冲突未决不可锁定</Text></div><IconGitMerge size={18} /></div>
+      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md" mt="md">
+        <div className="merge-pane">
+          <Group justify="space-between"><Text size="sm" fw={700}>导出本侧草稿</Text><Select size="xs" w={110} data={['船方', '码头']} value={exportSource} onChange={(v) => setExportSource(v as '船方' | '码头')} /></Group>
+          <Text size="xs" c="dimmed" mt={4}>生成包含方案版本 V{state.planRevision} 与 {state.cargo.length} 票货位指纹（如 BL-88247 → {slotFingerprint(state.cargo.find((c) => c.id === 'BL-88247') ?? state.cargo[0])}）的审阅包。</Text>
+          <Group mt="sm"><Button size="xs" variant="default" leftSection={<IconDownload size={14} />} onClick={handleExport}>生成审阅包</Button><Button size="xs" variant="subtle" leftSection={<IconCopy size={14} />} onClick={copyExport} disabled={!exportJson}>复制</Button></Group>
+          {exportJson && <Textarea mt="sm" minRows={6} maxRows={10} readOnly value={exportJson} styles={{ input: { fontFamily: 'monospace', fontSize: 10 } }} />}
+        </div>
+        <div className="merge-pane">
+          <Text size="sm" fw={700}>导入对方草稿</Text>
+          <Text size="xs" c="dimmed" mt={4}>粘贴对方离线审阅包（JSON）。导入失败不影响当前草稿与已存在冲突，可重试。</Text>
+          <Textarea mt="sm" minRows={6} maxRows={10} placeholder="粘贴对方审阅包 JSON…" value={importText} onChange={(e) => setImportText(e.currentTarget.value)} styles={{ input: { fontFamily: 'monospace', fontSize: 10 } }} />
+          {importParseError && <Text size="xs" c="red" mt={4}>{importParseError}</Text>}
+          {state.lastImport && <Text size="xs" mt={4} c={state.lastImport.ok ? 'teal' : 'red'}>{state.lastImport.ok ? `导入成功：${state.lastImport.source} 审阅包 ${state.lastImport.packageId} · ${new Date(state.lastImport.at).toLocaleTimeString('zh-CN')}` : `导入失败：${state.lastImport.error}（原草稿与冲突保留，可重试）`}</Text>}
+          <Group mt="sm"><Button size="xs" color="teal" leftSection={<IconUpload size={14} />} onClick={handleImport} disabled={!importText.trim()}>导入并逐票合并</Button><Button size="xs" variant="subtle" leftSection={<IconX size={14} />} onClick={() => { setImportText(''); setImportParseError(''); }}>清空</Button></Group>
+        </div>
+      </SimpleGrid>
+    </Card>
+
+    {openConflicts.length > 0 && <Card padding="md" className="conflict-card merge-conflicts-card">
+      <div className="panel-title"><div><strong>合并冲突（{openConflicts.length} 项未处理）</strong><Text size="xs" c="dimmed">同一提单或货位被两边改过，两版均保留；裁决前无法锁定方案</Text></div><IconAlertTriangle size={18} color="var(--red)" /></div>
+      <Stack gap="sm" mt="md">{openConflicts.map((c) => <MergeConflictRow key={c.id} conflict={c} dispatch={dispatch} />)}</Stack>
+    </Card>}
+    {resolvedConflicts.length > 0 && <Card padding="md" mt="md">
+      <div className="panel-title"><div><strong>已裁决冲突（{resolvedConflicts.length} 项）</strong><Text size="xs" c="dimmed">裁决结果已应用到货位与绑扎</Text></div><IconCheck size={18} color="teal" /></div>
+      <Stack gap={6} mt="sm">{resolvedConflicts.map((c) => <Text key={c.id} size="xs" c="dimmed">{c.detail} · 已采用{c.resolution === 'local' ? '船方' : '码头'}版</Text>)}</Stack>
+    </Card>}
+
+    <div className="compare-summary"><div><span>当前版本</span><strong>V{state.planRevision}</strong><small>总重 {stability.total.toFixed(1)}t</small></div><span className="compare-arrow">→</span><div><span>对账基线</span><strong>V{state.baselineRevision}</strong><small>已确认版本</small></div><Badge color="teal" variant="light">{slotChangedCount} 处货位变化</Badge>{openConflicts.length > 0 && <Badge color="red" variant="light">{openConflicts.length} 冲突未决</Badge>}</div>
+    <div className="compare-grid"><Card padding={0}><div className="panel-title"><div><strong>基线货位</strong><Text size="xs" c="dimmed">上次锁定版本 V{state.baselineRevision}</Text></div></div><div className="mini-deck old-deck">{Array.from({ length: 28 }).map((_, index) => <div key={index} className={index === 6 || index === 11 || index === 17 ? 'changed' : ''}>{index === 6 ? '219' : index === 11 ? '240' : index === 17 ? '247' : ''}</div>)}</div></Card><Card padding={0}><div className="panel-title"><div><strong>当前草稿</strong><Text size="xs" c="dimmed">船方编辑 · {state.draftSavedAt}</Text></div></div><div className="mini-deck new-deck">{Array.from({ length: 28 }).map((_, index) => <div key={index} className={index === 6 || index === 11 || index === 17 ? 'changed' : ''}>{index === 6 ? '219' : index === 11 ? '240' : index === 17 ? '247' : ''}</div>)}</div></Card></div>
+    <Card padding="md" mt="md"><div className="panel-title"><div><strong>参数差异</strong><Text size="xs" c="dimmed">系统通过检查的差异可直接接受</Text></div><Badge>{changed.length} 项</Badge></div><Table verticalSpacing="sm"><Table.Thead><Table.Tr><Table.Th>货物</Table.Th><Table.Th>字段</Table.Th><Table.Th>基线</Table.Th><Table.Th>当前草稿</Table.Th><Table.Th>说明</Table.Th><Table.Th>决定</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{[
       ['BL-88247', '货位', 'Bay 14 / Row 1', 'Bay 15 / Row 0', '扩大重大件绑扎操作空间'],
       ['BL-88219', '绑扎', '待绑扎', '需复核', '危险品隔离边界调整'],
       ['BL-88240', 'Tier', 'Tier 1', 'Tier 2', '降低舱内底层局部载荷']
     ].map((row) => <Table.Tr key={row[0]}><Table.Td>{row[0]}</Table.Td><Table.Td>{row[1]}</Table.Td><Table.Td><Text c="red" td="line-through">{row[2]}</Text></Table.Td><Table.Td><Text c="teal" fw={700}>{row[3]}</Text></Table.Td><Table.Td><Text size="xs">{row[4]}</Text></Table.Td><Table.Td><Checkbox label="接受" defaultChecked /></Table.Td></Table.Tr>)}</Table.Tbody></Table></Card>
-    <Modal opened={acceptOpen} onClose={() => setAcceptOpen(false)} title="形成配载审阅结论" centered><Stack><Text size="sm" c="dimmed">接受后生成新的只读版本并保留船长、码头和货主意见。锁定前仍可退回修改。</Text>{['重大件绑扎后由甲板部复核', '危险品隔离线在配载图中明确标注', '釜山卸货顺序不得改变'].map((limit) => <Checkbox key={limit} label={limit} checked={state.acceptedLimits.includes(limit)} onChange={() => dispatch(acceptLimit(limit))} />)}<Button color="teal" disabled={state.acceptedLimits.length < 3} onClick={() => { dispatch(lockPlan()); setAcceptOpen(false); }}>接受并锁定 V{state.planRevision + 1}</Button></Stack></Modal>
+    <Modal opened={acceptOpen} onClose={() => setAcceptOpen(false)} title="形成配载审阅结论" centered><Stack><Text size="sm" c="dimmed">接受后生成新的只读版本并保留船长、码头和货主意见。锁定前仍可退回修改。</Text>{openConflicts.length > 0 && <Text size="xs" c="red">仍有 {openConflicts.length} 项合并冲突未裁决，无法锁定方案。</Text>}{['重大件绑扎后由甲板部复核', '危险品隔离线在配载图中明确标注', '釜山卸货顺序不得改变'].map((limit) => <Checkbox key={limit} label={limit} checked={state.acceptedLimits.includes(limit)} onChange={() => dispatch(acceptLimit(limit))} />)}<Button color="teal" disabled={state.acceptedLimits.length < 3 || openConflicts.length > 0} onClick={() => { dispatch(lockPlan()); setAcceptOpen(false); }}>接受并锁定 V{state.planRevision + 1}</Button></Stack></Modal>
   </div>;
 }
 

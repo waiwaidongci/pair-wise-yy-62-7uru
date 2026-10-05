@@ -111,6 +111,15 @@ body { margin: 0; min-width: 320px; background: #eef2f0; }
 .print-deck b { position: absolute; right: 5px; bottom: 5px; background: #c26b2a; color: white; border-radius: 3px; font-size: 8px; padding: 2px 4px; }
 .print-signatures { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-top: 35px; padding-top: 17px; border-top: 1px solid var(--line); font-size: 11px; }
 
+.merge-card { border-color: #b9d9d0; background: #f7fbfa; }
+.merge-pane { padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: white; }
+.merge-conflicts-card { border-color: #eccd9d; background: #fffbf4; }
+.merge-conflict-row { padding: 10px 0; border-top: 1px solid #f0dfc5; }
+.merge-conflict-row:first-of-type { border-top: 0; padding-top: 0; }
+.merge-version { padding: 9px 11px; border-radius: 5px; border: 1px solid var(--line); background: #fafcfb; }
+.merge-version.local { border-color: #b9d9d0; background: #f0f8f6; }
+.merge-version.remote { border-color: #e6c79a; background: #fdf6ec; }
+
 @media (max-width: 1200px) {
   .stowage-grid { grid-template-columns: 260px minmax(460px, 1fr); }
   .stowage-grid > :last-child { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

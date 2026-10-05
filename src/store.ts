@@ -1,21 +1,27 @@
 import { configureStore, createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import { stowageApi, type Cargo, type CargoType } from './api';
+import { stowageApi, type Cargo, type ReviewPackage, type StowageComment } from './api';
+import { mergeReviewPackage, resolveConflict, validateReviewPackage, type MergeConflict } from './merge';
 
-export type StowageComment = {
-  id: string;
-  cargoId: string;
-  author: string;
-  role: '船长' | '码头' | '货主';
-  content: string;
-  status: '待确认' | '已接受' | '已退回';
+export type { StowageComment } from './api';
+
+type ImportStatus = {
+  ok: boolean;
+  at: string;
+  source?: string;
+  packageId?: string;
+  error?: string;
 };
 
 type State = {
   cargo: Cargo[];
   activeCargoId: string;
   planRevision: number;
+  baseline: Cargo[];
+  baselineRevision: number;
   comments: StowageComment[];
   acceptedLimits: string[];
+  conflicts: MergeConflict[];
+  lastImport: ImportStatus | null;
   locked: boolean;
   viewMode: '3d' | 'section';
   draftSavedAt: string;
@@ -32,20 +38,33 @@ const initialCargo: Cargo[] = [
 
 const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('yy62-stowage-plan') : null;
 const saved = raw ? JSON.parse(raw) : null;
-const initialState: State = saved ?? {
+const defaultState: State = {
   cargo: initialCargo,
   activeCargoId: 'BL-88247',
   planRevision: 5,
+  baseline: initialCargo.map((c) => ({ ...c })),
+  baselineRevision: 5,
   comments: [
     { id: 'CM-21', cargoId: 'BL-88219', author: '港方配载', role: '码头', content: '危险品箱与船员生活区保持隔离，请在最终图中标注危险品隔离线。', status: '待确认' },
     { id: 'CM-22', cargoId: 'BL-88247', author: '周船长', role: '船长', content: '重大件横向支撑需增加两组绑扎点，检查甲板局部强度。', status: '待确认' },
     { id: 'CM-23', cargoId: 'BL-88254', author: '货主代表', role: '货主', content: '釜山港卸货前不得覆盖散货舱口，已接受当前安排。', status: '已接受' }
   ],
   acceptedLimits: [],
+  conflicts: [],
+  lastImport: null,
   locked: false,
   viewMode: '3d',
   draftSavedAt: '09:52'
 };
+const initialState: State = saved
+  ? {
+      ...saved,
+      baseline: saved.baseline ?? initialCargo.map((c) => ({ ...c })),
+      baselineRevision: saved.baselineRevision ?? saved.planRevision ?? 5,
+      conflicts: saved.conflicts ?? [],
+      lastImport: saved.lastImport ?? null
+    }
+  : defaultState;
 
 const slice = createSlice({
   name: 'stowage',
@@ -77,11 +96,53 @@ const slice = createSlice({
       if (!state.acceptedLimits.includes(action.payload)) state.acceptedLimits.push(action.payload);
     },
     setViewMode(state, action: PayloadAction<'3d' | 'section'>) { state.viewMode = action.payload; },
-    lockPlan(state) { state.locked = true; state.planRevision += 1; }
+    importReviewPackage(state, action: PayloadAction<ReviewPackage>) {
+      const stamp = () => new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+      try {
+        const pkg = validateReviewPackage(action.payload);
+        const result = mergeReviewPackage(state.cargo, state.baseline, pkg, state.comments, state.acceptedLimits);
+        // 已解决的冲突保留决定，未解决的以本次合并结果为准
+        const resolvedExisting = state.conflicts.filter((c) => c.status === 'resolved');
+        const resolvedIds = new Set(resolvedExisting.map((c) => c.id));
+        const newOpen = result.conflicts.filter((c) => c.status === 'open' && !resolvedIds.has(c.id));
+        state.cargo = result.cargo;
+        state.comments = result.comments;
+        state.acceptedLimits = result.acceptedLimits;
+        state.conflicts = [...resolvedExisting, ...newOpen];
+        state.lastImport = { ok: true, at: new Date().toISOString(), source: pkg.source, packageId: pkg.packageId };
+        state.planRevision += 1;
+        state.draftSavedAt = stamp();
+      } catch (error) {
+        // 导入失败：原草稿与冲突原样保留，仅记录失败状态，可重试
+        state.lastImport = {
+          ok: false,
+          at: new Date().toISOString(),
+          source: action.payload?.source,
+          packageId: action.payload?.packageId,
+          error: error instanceof Error ? error.message : '导入失败'
+        };
+      }
+    },
+    resolveMergeConflict(state, action: PayloadAction<{ conflictId: string; resolution: 'local' | 'remote' }>) {
+      const { conflictId, resolution } = action.payload;
+      const result = resolveConflict(state.conflicts, conflictId, resolution, state.cargo, state.comments, state.baseline);
+      state.cargo = result.cargo;
+      state.comments = result.comments;
+      state.conflicts = result.conflicts;
+      state.planRevision += 1;
+      state.draftSavedAt = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    },
+    lockPlan(state) {
+      if (state.conflicts.some((c) => c.status === 'open')) return;
+      state.locked = true;
+      state.planRevision += 1;
+      state.baseline = state.cargo.map((c) => ({ ...c }));
+      state.baselineRevision = state.planRevision;
+    }
   }
 });
 
-export const { selectCargo, moveCargo, updateLashing, addComment, acceptComment, rejectComment, acceptLimit, setViewMode, lockPlan } = slice.actions;
+export const { selectCargo, moveCargo, updateLashing, addComment, acceptComment, rejectComment, acceptLimit, setViewMode, importReviewPackage, resolveMergeConflict, lockPlan } = slice.actions;
 
 export const store = configureStore({
   reducer: { stowage: slice.reducer, [stowageApi.reducerPath]: stowageApi.reducer },
